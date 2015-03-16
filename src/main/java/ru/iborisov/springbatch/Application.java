@@ -16,10 +16,8 @@ import org.springframework.batch.core.job.builder.FlowBuilder;
 import org.springframework.batch.core.job.flow.support.SimpleFlow;
 import org.springframework.batch.core.launch.support.RunIdIncrementer;
 import org.springframework.batch.core.scope.context.ChunkContext;
-import org.springframework.batch.core.step.item.ChunkOrientedTasklet;
 import org.springframework.batch.core.step.tasklet.Tasklet;
 import org.springframework.batch.item.ItemProcessor;
-import org.springframework.batch.item.ItemReader;
 import org.springframework.batch.item.ItemWriter;
 import org.springframework.batch.item.database.ItemPreparedStatementSetter;
 import org.springframework.batch.item.database.JdbcBatchItemWriter;
@@ -84,7 +82,7 @@ public class Application {
 
     @Bean
     @StepScope
-    public ItemReader<Url> siteReader() {
+    public JdbcCursorItemReader<Url> siteReader() {
         final JdbcCursorItemReader<Url> reader = new JdbcCursorItemReader<>();
         reader.setDataSource(jdbcTpl.getDataSource());
         reader.setSql("SELECT id, url FROM urls");
@@ -126,15 +124,16 @@ public class Application {
     }
 
     @Bean
-    public ItemProcessor<Url, Host> hostProcessor() {
+    public ItemProcessor<Url, Host> headersProcessor() {
         return new ItemProcessor<Url, Host>() {
             @Override
             public Host process(Url url) throws Exception {
                 final HttpResponse resp = Request.Head(url.url).execute().returnResponse();
-                final Header hostHeader = resp.getFirstHeader("Host");
-                final String host = hostHeader != null ? hostHeader.getValue() : null;
-                LOG.info("Host header = '{}' for URL: {}", host, url.url);
-                return new Host(url, host);
+                final Header serverHeader = resp.getFirstHeader("Server");
+                final String server = serverHeader != null ? serverHeader.getValue() : null;
+//                LOG.info("Headers for URL {}:\n{}", url.url, Arrays.toString(resp.getAllHeaders()));
+                LOG.info("Server header = '{}' for URL: {}", server, url.url);
+                return new Host(url, server);
             }
         };
     }
@@ -170,10 +169,10 @@ public class Application {
 
     @Bean
     Step hostStep() {
-        return stepBuilderFactory.get("hostStep")
+        return stepBuilderFactory.get("hostStep1")
                 .<Url, Host>chunk(1)
                 .reader(siteReader())
-                .processor(hostProcessor())
+                .processor(headersProcessor())
                 .writer(hostWriter())
                 .faultTolerant()
                 .retry(Exception.class)
@@ -236,8 +235,10 @@ public class Application {
 
         return jobBuilderFactory.get("job1")
                 .incrementer(new RunIdIncrementer())
-                .start(splitFlow)
-                .build()
+//                .start(splitFlow)
+                .start(hostStep())
+                .next(responseCodeStep())
+//                .build()
                 .build();
     }
 
